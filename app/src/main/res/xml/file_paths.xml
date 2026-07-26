@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Usado pelo FileProvider (ver AndroidManifest.xml) para partilhar os ficheiros de backup em
+    Android 9 (API 28) ou anterior, onde eles vivem em Downloads/Adsumus/ como ficheiros comuns
+    (fora da MediaStore). "Download/" aqui é relativo à raiz do armazenamento externo, tal como
+    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS) devolve.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-path name="downloads_adsumus" path="Download/Adsumus/" />
+</paths>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Necessário para falar com a impressora Xprinter via USB Host (o tablet como "host") -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
+
+    <!--
+        Só é preciso em Android 9 (API 28) ou anterior, para gravar o ficheiro
+        permanente de fechos de caixa em Downloads/Adsumus. Em Android 10+ isso
+        é feito através do MediaStore, sem necessitar desta permissão.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.AdsumusPos"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Necessário para partilhar os ficheiros de backup (Enviar Backup, nas Configurações)
+            em Android 9 (API 28) ou anterior, onde os ficheiros vivem em Downloads/Adsumus/ como
+            caminho de ficheiro comum (não via MediaStore). Em Android 10+, os ficheiros já têm
+            um content:// URI próprio do MediaStore e este provider nem chega a ser usado.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>
