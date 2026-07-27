@@ -3,6 +3,7 @@ package pt.adsumus.pos.data
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import pt.adsumus.pos.model.AuditLogEntry
 import pt.adsumus.pos.model.CartItem
 import pt.adsumus.pos.model.CashClosure
 import pt.adsumus.pos.model.CashMovement
@@ -41,9 +42,14 @@ object HistoryRepository {
     private val _movimentos = mutableStateListOf<CashMovement>()
     val movimentos: List<CashMovement> get() = _movimentos
 
+    private val _auditoria = mutableStateListOf<AuditLogEntry>()
+    /** Registo de auditoria completo — quem corrigiu que pedido, quando, e o que mudou. */
+    val auditoria: List<AuditLogEntry> get() = _auditoria
+
     private var proximoIdPedido = 1
     private var proximoIdFecho = 1
     private var proximoIdMovimento = 1
+    private var proximoIdAuditoria = 1
     private var diaAtualPedidos = ""
 
     private val FORMATO_DIA = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -82,9 +88,11 @@ object HistoryRepository {
             _pedidos.clear(); _pedidos.addAll(guardado.orders)
             _fechos.clear(); _fechos.addAll(guardado.closures)
             _movimentos.clear(); _movimentos.addAll(guardado.movements)
+            _auditoria.clear(); _auditoria.addAll(guardado.auditLog)
             proximoIdPedido = guardado.nextOrderId
             proximoIdFecho = guardado.nextClosureId
             proximoIdMovimento = guardado.nextMovementId
+            proximoIdAuditoria = guardado.nextAuditId
             ultimoFecho.value = guardado.ultimoFecho
             diaAtualPedidos = guardado.diaAtualPedidos.ifBlank {
                 guardado.orders.maxByOrNull { it.timestamp }?.let { diaDe(it.timestamp) } ?: ""
@@ -97,7 +105,8 @@ object HistoryRepository {
     private fun persistir() {
         if (!initialized) return
         // Lê o que já lá está para não apagar os produtos gravados pelo ProductRepository
-        // (o AppStorage grava sempre o ficheiro inteiro de uma vez).
+        // nem o PIN de administrador gravado pelo AdminAuth (o AppStorage grava sempre o
+        // ficheiro inteiro de uma vez, por isso é preciso reler o que não é gerido aqui).
         val estadoAtual = AppStorage.load()
         AppStorage.save(
             AppStorage.SavedState(
@@ -111,7 +120,11 @@ object HistoryRepository {
                 nextMovementId = proximoIdMovimento,
                 ultimoFecho = ultimoFecho.value,
                 diaAtualPedidos = diaAtualPedidos,
-                fundoInicialAtual = _fundoInicialAtual.value
+                fundoInicialAtual = _fundoInicialAtual.value,
+                auditLog = _auditoria.toList(),
+                nextAuditId = proximoIdAuditoria,
+                adminPinHash = estadoAtual?.adminPinHash,
+                adminPinSalt = estadoAtual?.adminPinSalt
             )
         )
     }
@@ -178,6 +191,102 @@ object HistoryRepository {
         persistir()
         if (initialized) CsvBackup.registarAnulacao(appContext, atualizado, diaDe(atualizado.timestamp))
     }
+
+    /**
+     * Verdadeiro enquanto o pedido ainda está no período em aberto (ainda não entrou num fecho
+     * de caixa) — só nesta janela faz sentido reabrir o pedido para o corrigir, porque depois do
+     * fecho os totais impressos e guardados no [PermanentLedger]/CSV já não devem mudar.
+     */
+    fun estaNoPeriodoAberto(pedido: OrderRecord): Boolean = pedido.timestamp >= ultimoFecho.value
+
+    /** Um pedido só pode ser editado se ainda estiver no período em aberto e não estiver anulado. */
+    fun podeEditar(pedido: OrderRecord): Boolean = !pedido.anulado && estaNoPeriodoAberto(pedido)
+
+    /**
+     * Corrige um pedido já registado (ex.: item a mais/a menos, quantidade errada), sem ter de o
+     * anular e lançar tudo de novo. Mantém o mesmo número de pedido e o mesmo instante original
+     * (para não saltar de dia/posição no Histórico) — só os artigos e o pagamento são atualizados,
+     * e o pedido fica marcado como [OrderRecord.editado] para auditoria. Só é permitido enquanto
+     * [podeEditar] for verdadeiro; chamar fora dessa janela não faz nada.
+     *
+     * Um pedido já pago só deve chegar aqui depois de o ecrã ter confirmado o PIN de administrador
+     * (ver [AdminAuth.validarPin]) — esta função em si não volta a validar o PIN, mas exige sempre
+     * um [autor] não vazio (quem o introduziu), porque é isso que fica gravado no registo de
+     * auditoria, permanentemente e sem poder ser editado.
+     */
+    fun atualizarPedido(
+        numero: Int,
+        timestampOriginal: Long,
+        novosItens: List<CartItem>,
+        metodoPagamento: PaymentMethod,
+        autor: String,
+        valorEntregue: Double? = null,
+        troco: Double? = null
+    ) {
+        if (novosItens.isEmpty() || autor.isBlank()) return
+        val idx = _pedidos.indexOfFirst { it.id == numero && it.timestamp == timestampOriginal }
+        if (idx < 0) return
+        val pedido = _pedidos[idx]
+        if (!podeEditar(pedido)) return
+        val agora = System.currentTimeMillis()
+        val resumo = resumoDiferencas(pedido.items, novosItens, pedido.paymentMethod, metodoPagamento)
+        val atualizado = pedido.copy(
+            items = novosItens,
+            paymentMethod = metodoPagamento,
+            valorEntregue = valorEntregue,
+            troco = troco,
+            editado = true,
+            editadoEm = agora
+        )
+        _pedidos[idx] = atualizado
+        _auditoria.add(
+            0,
+            AuditLogEntry(
+                id = proximoIdAuditoria++,
+                timestamp = agora,
+                autor = autor.trim(),
+                pedidoId = numero,
+                pedidoTimestamp = timestampOriginal,
+                resumo = resumo
+            )
+        )
+        persistir()
+        if (initialized) CsvBackup.registarEdicao(appContext, atualizado, diaDe(atualizado.timestamp))
+    }
+
+    /** Compara os artigos e o método de pagamento antes/depois, para o texto do registo de auditoria. */
+    private fun resumoDiferencas(
+        antigos: List<CartItem>,
+        novos: List<CartItem>,
+        metodoAntigo: PaymentMethod,
+        metodoNovo: PaymentMethod
+    ): String {
+        val porIdAntigo = antigos.associateBy { it.product.id }
+        val porIdNovo = novos.associateBy { it.product.id }
+        val partes = mutableListOf<String>()
+
+        novos.forEach { item ->
+            val antigo = porIdAntigo[item.product.id]
+            when {
+                antigo == null -> partes.add("+${item.quantity}x ${item.product.name}")
+                antigo.quantity != item.quantity -> partes.add("${item.product.name}: ${antigo.quantity}→${item.quantity}")
+            }
+        }
+        antigos.forEach { item ->
+            if (!porIdNovo.containsKey(item.product.id)) {
+                partes.add("-${item.quantity}x ${item.product.name}")
+            }
+        }
+        if (metodoAntigo != metodoNovo) {
+            partes.add("Pagamento: ${metodoAntigo.label}→${metodoNovo.label}")
+        }
+        return if (partes.isEmpty()) "Reimpressão sem alterações aos artigos" else partes.joinToString("; ")
+    }
+
+    /** Entradas do registo de auditoria para um pedido específico, mais recente primeiro. */
+    fun auditoriaDoPedido(numero: Int, timestamp: Long): List<AuditLogEntry> =
+        _auditoria.filter { it.pedidoId == numero && it.pedidoTimestamp == timestamp }
+            .sortedByDescending { it.timestamp }
 
     /** Regista um movimento manual de caixa (reforço/entrada ou saída/pagamento avulso). */
     fun registarMovimento(descricao: String, valor: Double, tipo: CashMovementType): CashMovement {

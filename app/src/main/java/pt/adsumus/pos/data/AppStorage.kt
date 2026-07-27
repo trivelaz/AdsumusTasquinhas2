@@ -3,6 +3,7 @@ package pt.adsumus.pos.data
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import pt.adsumus.pos.model.AuditLogEntry
 import pt.adsumus.pos.model.CartItem
 import pt.adsumus.pos.model.CashClosure
 import pt.adsumus.pos.model.CashMovement
@@ -78,7 +79,13 @@ object AppStorage {
                 nextMovementId = json.optInt("nextMovementId", 1),
                 ultimoFecho = json.optLong("ultimoFecho", System.currentTimeMillis()),
                 diaAtualPedidos = json.optString("diaAtualPedidos", ""),
-                fundoInicialAtual = json.optDouble("fundoInicialAtual", 0.0)
+                fundoInicialAtual = json.optDouble("fundoInicialAtual", 0.0),
+                auditLog = json.optJSONArray("auditLog")?.let { arr ->
+                    (0 until arr.length()).map { i -> parseAuditEntry(arr.getJSONObject(i)) }
+                } ?: emptyList(),
+                nextAuditId = json.optInt("nextAuditId", 1),
+                adminPinHash = json.optString("adminPinHash", "").ifBlank { null },
+                adminPinSalt = json.optString("adminPinSalt", "").ifBlank { null }
             )
         } catch (e: Exception) {
             null
@@ -112,6 +119,10 @@ object AppStorage {
             json.put("ultimoFecho", state.ultimoFecho)
             json.put("diaAtualPedidos", state.diaAtualPedidos)
             json.put("fundoInicialAtual", state.fundoInicialAtual)
+            json.put("auditLog", JSONArray().apply { state.auditLog.forEach { put(auditEntryToJson(it)) } })
+            json.put("nextAuditId", state.nextAuditId)
+            state.adminPinHash?.let { json.put("adminPinHash", it) }
+            state.adminPinSalt?.let { json.put("adminPinSalt", it) }
             file.writeText(json.toString())
         } catch (e: Exception) {
             // Uma falha a gravar o backup local nunca deve rebentar a app.
@@ -138,7 +149,9 @@ object AppStorage {
                 .let { runCatching { PaymentMethod.valueOf(it) }.getOrDefault(PaymentMethod.DINHEIRO) },
             valorEntregue = if (o.has("valorEntregue") && !o.isNull("valorEntregue")) o.getDouble("valorEntregue") else null,
             troco = if (o.has("troco") && !o.isNull("troco")) o.getDouble("troco") else null,
-            anulado = o.optBoolean("anulado", false)
+            anulado = o.optBoolean("anulado", false),
+            editado = o.optBoolean("editado", false),
+            editadoEm = if (o.has("editadoEm") && !o.isNull("editadoEm")) o.getLong("editadoEm") else null
         )
     }
 
@@ -149,6 +162,8 @@ object AppStorage {
         order.valorEntregue?.let { put("valorEntregue", it) }
         order.troco?.let { put("troco", it) }
         put("anulado", order.anulado)
+        put("editado", order.editado)
+        order.editadoEm?.let { put("editadoEm", it) }
         put("items", JSONArray().apply {
             order.items.forEach { item ->
                 put(JSONObject().apply {
@@ -248,6 +263,24 @@ object AppStorage {
         put("movimentos", JSONArray().apply { c.movimentos.forEach { put(movementToJson(it)) } })
     }
 
+    private fun parseAuditEntry(o: JSONObject): AuditLogEntry = AuditLogEntry(
+        id = o.getInt("id"),
+        timestamp = o.getLong("timestamp"),
+        autor = o.getString("autor"),
+        pedidoId = o.getInt("pedidoId"),
+        pedidoTimestamp = o.getLong("pedidoTimestamp"),
+        resumo = o.getString("resumo")
+    )
+
+    private fun auditEntryToJson(a: AuditLogEntry): JSONObject = JSONObject().apply {
+        put("id", a.id)
+        put("timestamp", a.timestamp)
+        put("autor", a.autor)
+        put("pedidoId", a.pedidoId)
+        put("pedidoTimestamp", a.pedidoTimestamp)
+        put("resumo", a.resumo)
+    }
+
     data class SavedState(
         val products: List<Product>?,
         val nextProductId: Int?,
@@ -259,6 +292,11 @@ object AppStorage {
         val nextMovementId: Int,
         val ultimoFecho: Long,
         val diaAtualPedidos: String = "",
-        val fundoInicialAtual: Double = 0.0
+        val fundoInicialAtual: Double = 0.0,
+        val auditLog: List<AuditLogEntry> = emptyList(),
+        val nextAuditId: Int = 1,
+        /** Hash salgado do PIN de administrador (nunca o PIN em si) — ver [AdminAuth]. */
+        val adminPinHash: String? = null,
+        val adminPinSalt: String? = null
     )
 }

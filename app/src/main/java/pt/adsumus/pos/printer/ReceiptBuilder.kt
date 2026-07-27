@@ -19,7 +19,7 @@ object ReceiptBuilder {
         itens.filter { it.product.category == categoria }
 
     /** Talão completo para o cliente, com número do pedido, todos os artigos e o total. */
-    fun reciboCliente(numeroPedido: Int, itens: List<CartItem>): ByteArray {
+    fun reciboCliente(numeroPedido: Int, itens: List<CartItem>, corrigido: Boolean = false): ByteArray {
         val doc = ReceiptDocument()
         doc.align(true).negrito(true).tamanhoDuplo(true)
         doc.linha("ADSUMUS")
@@ -29,6 +29,7 @@ object ReceiptBuilder {
         doc.linha(separador())
         doc.negrito(true).tamanhoDuplo(true)
         doc.linha("PEDIDO #$numeroPedido")
+        if (corrigido) doc.linha("*** CORRIGIDO ***")
         doc.tamanhoDuplo(false).negrito(false)
         doc.linha(separador())
         doc.align(false)
@@ -52,11 +53,11 @@ object ReceiptBuilder {
     }
 
     /** Talão simples para a cozinha/bar — número do pedido, nomes e quantidades, em letra grande. */
-    fun talaoProducao(titulo: String, numeroPedido: Int, itens: List<CartItem>): ByteArray {
+    fun talaoProducao(titulo: String, numeroPedido: Int, itens: List<CartItem>, corrigido: Boolean = false): ByteArray {
         val doc = ReceiptDocument()
         doc.align(true).negrito(true).tamanhoDuplo(true)
         doc.linha(titulo)
-        doc.linha("PEDIDO #$numeroPedido")
+        doc.linha("PEDIDO #$numeroPedido${if (corrigido) " (CORRIGIDO)" else ""}")
         doc.tamanhoDuplo(false)
         doc.linha(SimpleDateFormat("HH:mm", PT).format(Date()))
         doc.linha(separador())

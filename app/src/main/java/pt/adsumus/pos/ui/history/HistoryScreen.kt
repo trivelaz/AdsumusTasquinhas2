@@ -3,6 +3,16 @@ package pt.adsumus.pos.ui.history
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocalBar
+import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,6 +27,7 @@ import pt.adsumus.pos.model.OrderRecord
 import pt.adsumus.pos.printer.ReceiptBuilder
 import pt.adsumus.pos.printer.UsbPrinterManager
 import pt.adsumus.pos.ui.components.AdsumusTopBar
+import pt.adsumus.pos.ui.security.AdminAuthDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,7 +50,7 @@ private enum class TipoTalao(val rotulo: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(onBack: () -> Unit) {
+fun HistoryScreen(onBack: () -> Unit, onEditarPedido: (OrderRecord, String) -> Unit = { _, _ -> }) {
     val dias = HistoryRepository.pedidosAgrupadosPorDia()
     val context = LocalContext.current
     val printer = remember { UsbPrinterManager(context) }
@@ -47,6 +58,10 @@ fun HistoryScreen(onBack: () -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
     var idAReimprimir by remember { mutableStateOf<Int?>(null) }
     var pedidoParaAnular by remember { mutableStateOf<OrderRecord?>(null) }
+    // Pedido que o utilizador quer editar, mas cuja edição ainda não foi autorizada com o PIN.
+    var pedidoParaAutorizar by remember { mutableStateOf<OrderRecord?>(null) }
+    // Pedido cujo histórico de correções está a ser consultado (só leitura, não pede PIN).
+    var pedidoParaVerAuditoria by remember { mutableStateOf<OrderRecord?>(null) }
 
     // Por omissão mostra o dia mais recente (o dia em curso do evento).
     var diaSelecionadoIdx by remember(dias.size) { mutableStateOf((dias.size - 1).coerceAtLeast(0)) }
@@ -119,7 +134,10 @@ fun HistoryScreen(onBack: () -> Unit) {
                 items(pedidosDoDia, key = { "${it.id}-${it.timestamp}" }) { pedido ->
                     OrderRecordCard(
                         pedido = pedido,
+                        podeEditar = HistoryRepository.podeEditar(pedido),
                         aReimprimir = idAReimprimir == pedido.id,
+                        onEditar = { pedidoParaAutorizar = pedido },
+                        onVerAuditoria = { pedidoParaVerAuditoria = pedido },
                         onReimprimirCliente = { reimprimir(pedido, TipoTalao.CLIENTE) },
                         onReimprimirCozinha = { reimprimir(pedido, TipoTalao.COZINHA) },
                         onReimprimirBar = { reimprimir(pedido, TipoTalao.BAR) },
@@ -174,12 +192,57 @@ fun HistoryScreen(onBack: () -> Unit) {
             }
         )
     }
+
+    // Pedido já está pago — exige PIN de administrador antes de abrir o ecrã de edição.
+    pedidoParaAutorizar?.let { pedido ->
+        AdminAuthDialog(
+            mensagem = "O pedido #${pedido.id} já está pago. Introduz o PIN de administrador para o poderes corrigir.",
+            onDismiss = { pedidoParaAutorizar = null },
+            onAutorizado = { autor ->
+                pedidoParaAutorizar = null
+                onEditarPedido(pedido, autor)
+            }
+        )
+    }
+
+    // Consulta (só leitura, sem PIN) do que já foi corrigido neste pedido.
+    pedidoParaVerAuditoria?.let { pedido ->
+        val entradas = HistoryRepository.auditoriaDoPedido(pedido.id, pedido.timestamp)
+        AlertDialog(
+            onDismissRequest = { pedidoParaVerAuditoria = null },
+            title = { Text("Alterações ao pedido #${pedido.id}") },
+            text = {
+                if (entradas.isEmpty()) {
+                    Text("Sem correções registadas.")
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        entradas.forEach { entrada ->
+                            Column {
+                                Text(
+                                    "${formatarHora(entrada.timestamp)} — ${entrada.autor}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(entrada.resumo, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pedidoParaVerAuditoria = null }) { Text("Fechar") }
+            }
+        )
+    }
 }
 
 @Composable
 private fun OrderRecordCard(
     pedido: OrderRecord,
+    podeEditar: Boolean,
     aReimprimir: Boolean,
+    onEditar: () -> Unit,
+    onVerAuditoria: () -> Unit,
     onReimprimirCliente: () -> Unit,
     onReimprimirCozinha: () -> Unit,
     onReimprimirBar: () -> Unit,
@@ -190,18 +253,20 @@ private fun OrderRecordCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = if (pedido.anulado)
                 MaterialTheme.colorScheme.errorContainer
             else
                 MaterialTheme.colorScheme.surfaceVariant
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
                 Column {
                     Text(
@@ -209,12 +274,39 @@ private fun OrderRecordCard(
                         style = MaterialTheme.typography.titleMedium
                     )
                     if (pedido.anulado) {
-                        Text(
-                            "ANULADO — não conta para o total",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "ANULADO — não conta para o total",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else if (pedido.editado) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "CORRIGIDO" + (pedido.editadoEm?.let { " às ${formatarHora(it)}" } ?: ""),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            IconButton(onClick = onVerAuditoria, modifier = Modifier.size(20.dp)) {
+                                Icon(
+                                    Icons.Filled.History,
+                                    contentDescription = "Ver alterações",
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
                     }
                 }
                 Text(
@@ -226,10 +318,19 @@ private fun OrderRecordCard(
             }
             Spacer(Modifier.height(8.dp))
             pedido.items.forEach { item ->
-                Text(
-                    "${item.quantity}x ${item.product.name}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (item.product.category == Category.BEBIDA) Icons.Filled.LocalBar else Icons.Filled.Restaurant,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "${item.quantity}x ${item.product.name}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
             Spacer(Modifier.height(12.dp))
             Row(
@@ -237,24 +338,48 @@ private fun OrderRecordCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onAnularOuReativar) {
-                    Text(
-                        if (pedido.anulado) "REATIVAR PEDIDO" else "ANULAR PEDIDO",
-                        color = MaterialTheme.colorScheme.error
-                    )
+                Row {
+                    if (podeEditar) {
+                        TextButton(onClick = onEditar) {
+                            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(2.dp))
+                            Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("EDITAR")
+                        }
+                    }
+                    TextButton(onClick = onAnularOuReativar) {
+                        Icon(
+                            if (pedido.anulado) Icons.Filled.Undo else Icons.Filled.Warning,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (pedido.anulado) "REATIVAR" else "ANULAR",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
                 Row {
                     if (temComida) {
                         TextButton(onClick = onReimprimirCozinha, enabled = !aReimprimir) {
-                            Text("TALÃO COZINHA")
+                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("COZINHA")
                         }
                     }
                     if (temBebida) {
                         TextButton(onClick = onReimprimirBar, enabled = !aReimprimir) {
-                            Text("TALÃO BAR")
+                            Icon(Icons.Filled.Print, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("BAR")
                         }
                     }
                     TextButton(onClick = onReimprimirCliente, enabled = !aReimprimir) {
+                        Icon(Icons.Filled.Receipt, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text(if (aReimprimir) "A REIMPRIMIR..." else "RECIBO")
                     }
                 }

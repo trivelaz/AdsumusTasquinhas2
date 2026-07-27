@@ -12,17 +12,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import pt.adsumus.pos.data.AdminAuth
 import pt.adsumus.pos.data.HistoryRepository
 import pt.adsumus.pos.data.ProductRepository
+import pt.adsumus.pos.model.OrderRecord
 import pt.adsumus.pos.ui.caixa.FechoCaixaScreen
 import pt.adsumus.pos.ui.history.HistoryScreen
 import pt.adsumus.pos.ui.home.HomeScreen
 import pt.adsumus.pos.ui.order.OrderScreen
 import pt.adsumus.pos.ui.products.ProductManagementScreen
+import pt.adsumus.pos.ui.security.AuditLogScreen
 import pt.adsumus.pos.ui.settings.SettingsScreen
 import pt.adsumus.pos.ui.theme.ADSUMUSTheme
 
-private enum class Ecra { INICIO, PEDIDO, HISTORICO, FECHO_CAIXA, CONFIGURACOES, PRODUTOS }
+private enum class Ecra { INICIO, PEDIDO, HISTORICO, FECHO_CAIXA, CONFIGURACOES, PRODUTOS, AUDITORIA }
 
 class MainActivity : ComponentActivity() {
 
@@ -45,26 +48,62 @@ class MainActivity : ComponentActivity() {
         // (tem de ser feito antes de desenhar qualquer ecrã).
         ProductRepository.init(this)
         HistoryRepository.init(this)
+        AdminAuth.init(this)
 
         setContent {
             ADSUMUSTheme {
                 var ecra by remember { mutableStateOf(Ecra.INICIO) }
 
+                // Pedido que está a ser corrigido (não nulo só quando se chega ao ecrã de Pedido
+                // a partir do botão "EDITAR" no Histórico) — permite ao ecrã de Pedido saber que
+                // deve pré-preencher o carrinho e, ao concluir, voltar para o Histórico em vez de
+                // ficar pronto para lançar um pedido novo.
+                var pedidoEmEdicao by remember { mutableStateOf<OrderRecord?>(null) }
+                // Nome de quem introduziu o PIN de administrador para autorizar a correção atual.
+                var autorEdicao by remember { mutableStateOf<String?>(null) }
+
                 when (ecra) {
                     Ecra.INICIO -> HomeScreen(
-                        onNovoPedido = { ecra = Ecra.PEDIDO },
+                        onNovoPedido = {
+                            pedidoEmEdicao = null
+                            autorEdicao = null
+                            ecra = Ecra.PEDIDO
+                        },
                         onHistorico = { ecra = Ecra.HISTORICO },
                         onFechoCaixa = { ecra = Ecra.FECHO_CAIXA },
                         onConfiguracoes = { ecra = Ecra.CONFIGURACOES }
                     )
-                    Ecra.PEDIDO -> OrderScreen(onBack = { ecra = Ecra.INICIO })
-                    Ecra.HISTORICO -> HistoryScreen(onBack = { ecra = Ecra.INICIO })
+                    Ecra.PEDIDO -> OrderScreen(
+                        pedidoParaEditar = pedidoEmEdicao,
+                        autorEdicao = autorEdicao,
+                        onBack = {
+                            val voltarPara = if (pedidoEmEdicao != null) Ecra.HISTORICO else Ecra.INICIO
+                            pedidoEmEdicao = null
+                            autorEdicao = null
+                            ecra = voltarPara
+                        },
+                        onEdicaoConcluida = {
+                            pedidoEmEdicao = null
+                            autorEdicao = null
+                            ecra = Ecra.HISTORICO
+                        }
+                    )
+                    Ecra.HISTORICO -> HistoryScreen(
+                        onBack = { ecra = Ecra.INICIO },
+                        onEditarPedido = { pedido, autor ->
+                            pedidoEmEdicao = pedido
+                            autorEdicao = autor
+                            ecra = Ecra.PEDIDO
+                        }
+                    )
                     Ecra.FECHO_CAIXA -> FechoCaixaScreen(onBack = { ecra = Ecra.INICIO })
                     Ecra.CONFIGURACOES -> SettingsScreen(
                         onBack = { ecra = Ecra.INICIO },
-                        onGerirProdutos = { ecra = Ecra.PRODUTOS }
+                        onGerirProdutos = { ecra = Ecra.PRODUTOS },
+                        onVerAuditoria = { ecra = Ecra.AUDITORIA }
                     )
                     Ecra.PRODUTOS -> ProductManagementScreen(onBack = { ecra = Ecra.CONFIGURACOES })
+                    Ecra.AUDITORIA -> AuditLogScreen(onBack = { ecra = Ecra.CONFIGURACOES })
                 }
             }
         }

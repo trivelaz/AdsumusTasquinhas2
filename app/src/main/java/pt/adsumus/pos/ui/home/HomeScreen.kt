@@ -3,12 +3,18 @@ package pt.adsumus.pos.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -17,6 +23,7 @@ import pt.adsumus.pos.ui.components.AdsumusLogo
 private data class HomeAction(
     val titulo: String,
     val subtitulo: String,
+    val icone: ImageVector,
     val onClick: () -> Unit
 )
 
@@ -34,12 +41,12 @@ fun HomeScreen(
     onConfiguracoes: () -> Unit = {}
 ) {
     val linha1 = listOf(
-        HomeAction("Novo Pedido", "Registar uma nova venda", onNovoPedido),
-        HomeAction("Histórico", "Ver pedidos desta sessão", onHistorico)
+        HomeAction("Novo Pedido", "Registar uma nova venda", Icons.Filled.PointOfSale, onNovoPedido),
+        HomeAction("Histórico", "Ver e corrigir pedidos desta sessão", Icons.Filled.History, onHistorico)
     )
     val linha2 = listOf(
-        HomeAction("Fecho de Caixa", "Totais e fecho do período", onFechoCaixa),
-        HomeAction("Configurações", "Impressora e manutenção", onConfiguracoes)
+        HomeAction("Fecho de Caixa", "Totais e fecho do período", Icons.Filled.Payments, onFechoCaixa),
+        HomeAction("Configurações", "Impressora e manutenção", Icons.Filled.Settings, onConfiguracoes)
     )
 
     Box(
@@ -122,21 +129,37 @@ private fun HomeActionCard(acao: HomeAction, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            verticalArrangement = Arrangement.Bottom
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = acao.titulo.uppercase(),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = acao.subtitulo,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp
-            )
+            Box(
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    .padding(12.dp)
+            ) {
+                Icon(
+                    acao.icone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            Column {
+                Text(
+                    text = acao.titulo.uppercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = acao.subtitulo,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp
+                )
+            }
         }
     }
 }

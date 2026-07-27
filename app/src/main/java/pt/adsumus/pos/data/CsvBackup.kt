@@ -66,7 +66,7 @@ object CsvBackup {
             pedido.id,
             dia,
             FORMATO_DATA_HORA.format(Date(pedido.timestamp)),
-            if (pedido.anulado) "ANULADO" else "ATIVO",
+            if (pedido.anulado) "ANULADO" else if (pedido.editado) "EDITADO" else "ATIVO",
             pedido.paymentMethod.label,
             pedido.valorEntregue?.let { num(it) } ?: "",
             pedido.troco?.let { num(it) } ?: "",
@@ -87,6 +87,16 @@ object CsvBackup {
      * registo completo de auditoria (quando foi lançado e quando/se foi anulado).
      */
     fun registarAnulacao(context: Context, pedido: OrderRecord, dia: String) {
+        anexar(context, FICHEIRO_PEDIDOS, cabecalhoPedidos(), linhaPedido(pedido, dia))
+    }
+
+    /**
+     * Chamado automaticamente sempre que um pedido é corrigido — ver [HistoryRepository.atualizarPedido].
+     * Tal como [registarAnulacao], NÃO reescreve a linha original: acrescenta uma nova linha com os
+     * artigos/valores corrigidos, mantendo no CSV o registo completo de auditoria (o que foi
+     * impresso originalmente e o que ficou depois da correção).
+     */
+    fun registarEdicao(context: Context, pedido: OrderRecord, dia: String) {
         anexar(context, FICHEIRO_PEDIDOS, cabecalhoPedidos(), linhaPedido(pedido, dia))
     }
 

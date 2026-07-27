@@ -4,10 +4,19 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocalBar
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -15,6 +24,7 @@ import pt.adsumus.pos.data.HistoryRepository
 import pt.adsumus.pos.data.ProductRepository
 import pt.adsumus.pos.model.CartItem
 import pt.adsumus.pos.model.Category
+import pt.adsumus.pos.model.OrderRecord
 import pt.adsumus.pos.model.PaymentMethod
 import pt.adsumus.pos.model.Product
 import pt.adsumus.pos.printer.ReceiptBuilder
@@ -22,9 +32,27 @@ import pt.adsumus.pos.printer.UsbPrinterManager
 import pt.adsumus.pos.ui.components.AdsumusTopBar
 import java.util.Locale
 
+private fun iconeDaCategoria(categoria: Category): ImageVector = when (categoria) {
+    Category.COMIDA -> Icons.Filled.Restaurant
+    Category.BEBIDA -> Icons.Filled.LocalBar
+    Category.JOGOS -> Icons.Filled.SportsEsports
+}
+
+/**
+ * Ecrã de "Novo Pedido" — usado tanto para lançar um pedido de raiz como para EDITAR um pedido
+ * já registado. Quando [pedidoParaEditar] não é nulo, o carrinho arranca preenchido com os
+ * artigos desse pedido; ao concluir, em vez de criar um pedido novo, corrige o pedido existente
+ * (mesmo número) e reimprime os talões marcados como corrigidos.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OrderScreen(onBack: () -> Unit) {
+fun OrderScreen(
+    onBack: () -> Unit,
+    pedidoParaEditar: OrderRecord? = null,
+    autorEdicao: String? = null,
+    onEdicaoConcluida: (() -> Unit)? = null
+) {
+    val emEdicao = pedidoParaEditar != null
 
     val context = LocalContext.current
     val printer = remember { UsbPrinterManager(context) }
@@ -33,11 +61,13 @@ fun OrderScreen(onBack: () -> Unit) {
 
     var categoriaSelecionada by remember { mutableStateOf(Category.COMIDA) }
     var pesquisa by remember { mutableStateOf("") }
-    val carrinho = remember { mutableStateListOf<CartItem>() }
+    val carrinho = remember {
+        mutableStateListOf<CartItem>().apply { pedidoParaEditar?.let { addAll(it.items) } }
+    }
     var aImprimir by remember { mutableStateOf(false) }
     var mostrarConfirmacaoSair by remember { mutableStateOf(false) }
     var mostrarPagamento by remember { mutableStateOf(false) }
-    var metodoPagamento by remember { mutableStateOf(PaymentMethod.DINHEIRO) }
+    var metodoPagamento by remember { mutableStateOf(pedidoParaEditar?.paymentMethod ?: PaymentMethod.DINHEIRO) }
     var valorEntregueTexto by remember { mutableStateOf("") }
 
     fun tentarVoltar() {
@@ -51,17 +81,27 @@ fun OrderScreen(onBack: () -> Unit) {
     if (mostrarConfirmacaoSair) {
         AlertDialog(
             onDismissRequest = { mostrarConfirmacaoSair = false },
-            title = { Text("Sair sem guardar?") },
-            text = { Text("Tens artigos no pedido atual que ainda nao foram enviados para impressao. Se saíres agora, o pedido perde-se.") },
+            title = { Text(if (emEdicao) "Sair sem guardar a correção?" else "Sair sem guardar?") },
+            text = {
+                Text(
+                    if (emEdicao)
+                        "As alterações a este pedido ainda não foram guardadas nem reimpressas. " +
+                            "Se saíres agora, o pedido #${pedidoParaEditar?.id} fica tal como estava antes."
+                    else
+                        "Tens artigos no pedido atual que ainda nao foram enviados para impressao. Se saíres agora, o pedido perde-se."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     mostrarConfirmacaoSair = false
-                    carrinho.clear()
+                    if (!emEdicao) carrinho.clear()
                     onBack()
-                }) { Text("Sair e perder pedido") }
+                }) { Text(if (emEdicao) "Sair sem guardar" else "Sair e perder pedido") }
             },
             dismissButton = {
-                TextButton(onClick = { mostrarConfirmacaoSair = false }) { Text("Continuar pedido") }
+                TextButton(onClick = { mostrarConfirmacaoSair = false }) {
+                    Text(if (emEdicao) "Continuar a editar" else "Continuar pedido")
+                }
             }
         )
     }
@@ -88,143 +128,208 @@ fun OrderScreen(onBack: () -> Unit) {
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = { AdsumusTopBar(title = "Novo Pedido", onBack = { tentarVoltar() }) }
+        topBar = {
+            AdsumusTopBar(
+                title = if (emEdicao) "Editar Pedido #${pedidoParaEditar?.id}" else "Novo Pedido",
+                onBack = { tentarVoltar() }
+            )
+        }
     ) { padding ->
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-
-            // ---- Coluna esquerda: categorias + lista de produtos ----
-            Column(modifier = Modifier.weight(1.4f).fillMaxHeight()) {
-                TabRow(selectedTabIndex = Category.entries.indexOf(categoriaSelecionada)) {
-                    Category.entries.forEach { cat ->
-                        Tab(
-                            selected = categoriaSelecionada == cat,
-                            onClick = { categoriaSelecionada = cat },
-                            text = { Text(cat.label) }
+            if (emEdicao) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(
+                            "A corrigir o pedido #${pedidoParaEditar?.id}" +
+                                (autorEdicao?.let { " — autorizado por $it" } ?: "") +
+                                ". Ajusta os artigos e conclui para reimprimir os talões corrigidos.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = pesquisa,
-                    onValueChange = { pesquisa = it },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    placeholder = { Text("Pesquisar produto...") },
-                    singleLine = true,
-                    trailingIcon = {
-                        if (pesquisa.isNotEmpty()) {
-                            TextButton(onClick = { pesquisa = "" }) { Text("×") }
-                        }
-                    }
-                )
-
-                // Com texto de pesquisa, procura em todas as categorias de uma vez (mais rápido
-                // do que andar a mudar de separador); sem texto, mostra só a categoria selecionada.
-                val produtos = if (pesquisa.isBlank()) {
-                    ProductRepository.products.filter { it.category == categoriaSelecionada }
-                } else {
-                    ProductRepository.products.filter { it.name.contains(pesquisa.trim(), ignoreCase = true) }
-                }
-
-                LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                    items(produtos, key = { it.id }) { produto ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text(produto.name, style = MaterialTheme.typography.titleMedium)
-                                    if (pesquisa.isNotBlank()) {
-                                        Text(
-                                            produto.category.label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        String.format(Locale("pt", "PT"), "%.2f €", produto.price),
-                                        modifier = Modifier.padding(end = 12.dp)
-                                    )
-                                    Button(onClick = { adicionar(produto) }) { Text("Adicionar") }
-                                }
-                            }
-                        }
                     }
                 }
             }
 
-            VerticalDivider()
+            Row(modifier = Modifier.fillMaxSize()) {
 
-            // ---- Coluna direita: carrinho / pedido atual ----
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(16.dp)
-            ) {
-                Text("Pedido Atual", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(12.dp))
-
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(carrinho, key = { it.product.id }) { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(item.product.name)
-                                Text(
-                                    String.format(
-                                        Locale("pt", "PT"),
-                                        "%.2f € x %d  =  %.2f €",
-                                        item.product.price, item.quantity, item.subtotal
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            TextButton(onClick = { alterarQuantidade(item, -1) }) { Text("−") }
-                            Text("${item.quantity}")
-                            TextButton(onClick = { alterarQuantidade(item, 1) }) { Text("+") }
-                            TextButton(onClick = { carrinho.removeIf { it.product.id == item.product.id } }) { Text("×") }
+                // ---- Coluna esquerda: categorias + lista de produtos ----
+                Column(modifier = Modifier.weight(1.4f).fillMaxHeight()) {
+                    TabRow(selectedTabIndex = Category.entries.indexOf(categoriaSelecionada)) {
+                        Category.entries.forEach { cat ->
+                            Tab(
+                                selected = categoriaSelecionada == cat,
+                                onClick = { categoriaSelecionada = cat },
+                                text = { Text(cat.label) },
+                                icon = { Icon(iconeDaCategoria(cat), contentDescription = null) }
+                            )
                         }
-                        HorizontalDivider()
+                    }
+
+                    OutlinedTextField(
+                        value = pesquisa,
+                        onValueChange = { pesquisa = it },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        placeholder = { Text("Pesquisar produto...") },
+                        singleLine = true,
+                        shape = MaterialTheme.shapes.medium,
+                        trailingIcon = {
+                            if (pesquisa.isNotEmpty()) {
+                                IconButton(onClick = { pesquisa = "" }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Limpar pesquisa")
+                                }
+                            }
+                        }
+                    )
+
+                    // Com texto de pesquisa, procura em todas as categorias de uma vez (mais rápido
+                    // do que andar a mudar de separador); sem texto, mostra só a categoria selecionada.
+                    val produtos = if (pesquisa.isBlank()) {
+                        ProductRepository.products.filter { it.category == categoriaSelecionada }
+                    } else {
+                        ProductRepository.products.filter { it.name.contains(pesquisa.trim(), ignoreCase = true) }
+                    }
+
+                    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                        items(produtos, key = { it.id }) { produto ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                shape = MaterialTheme.shapes.medium,
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            iconeDaCategoria(produto.category),
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(end = 12.dp)
+                                        )
+                                        Column {
+                                            Text(produto.name, style = MaterialTheme.typography.titleMedium)
+                                            Text(
+                                                String.format(Locale("pt", "PT"), "%.2f €", produto.price),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    FilledTonalButton(onClick = { adicionar(produto) }) {
+                                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                                        Text("Adicionar")
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    String.format(Locale("pt", "PT"), "TOTAL: %.2f €", total),
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Spacer(Modifier.height(12.dp))
+                VerticalDivider()
 
-                Button(
-                    onClick = {
-                        if (carrinho.isEmpty() || aImprimir) return@Button
-                        metodoPagamento = PaymentMethod.DINHEIRO
-                        valorEntregueTexto = ""
-                        mostrarPagamento = true
-                    },
-                    enabled = carrinho.isNotEmpty() && !aImprimir,
-                    modifier = Modifier.fillMaxWidth()
+                // ---- Coluna direita: carrinho / pedido atual ----
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(16.dp)
                 ) {
-                    Text(if (aImprimir) "A IMPRIMIR..." else "FINALIZAR PEDIDO")
+                    Text(
+                        if (emEdicao) "Artigos do Pedido #${pedidoParaEditar?.id}" else "Pedido Atual",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    if (carrinho.isEmpty()) {
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(
+                                "Sem artigos ainda.\nToca em \"Adicionar\" à esquerda.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            items(carrinho, key = { it.product.id }) { item ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(item.product.name)
+                                        Text(
+                                            String.format(
+                                                Locale("pt", "PT"),
+                                                "%.2f € x %d  =  %.2f €",
+                                                item.product.price, item.quantity, item.subtotal
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    IconButton(onClick = { alterarQuantidade(item, -1) }) {
+                                        Icon(Icons.Filled.Remove, contentDescription = "Diminuir quantidade")
+                                    }
+                                    Text("${item.quantity}", style = MaterialTheme.typography.titleMedium)
+                                    IconButton(onClick = { alterarQuantidade(item, 1) }) {
+                                        Icon(Icons.Filled.Add, contentDescription = "Aumentar quantidade")
+                                    }
+                                    IconButton(onClick = { carrinho.removeIf { it.product.id == item.product.id } }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Remover artigo", tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        String.format(Locale("pt", "PT"), "TOTAL: %.2f €", total),
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            if (carrinho.isEmpty() || aImprimir) return@Button
+                            metodoPagamento = pedidoParaEditar?.paymentMethod ?: PaymentMethod.DINHEIRO
+                            valorEntregueTexto = pedidoParaEditar?.valorEntregue
+                                ?.let { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }
+                                ?: ""
+                            mostrarPagamento = true
+                        },
+                        enabled = carrinho.isNotEmpty() && !aImprimir,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (aImprimir) "A IMPRIMIR..."
+                            else if (emEdicao) "GUARDAR CORREÇÃO"
+                            else "FINALIZAR PEDIDO"
+                        )
+                    }
                 }
             }
         }
@@ -315,7 +420,6 @@ fun OrderScreen(onBack: () -> Unit) {
                     onClick = {
                         aImprimir = true
                         val itensPedido = carrinho.toList()
-                        val numeroPedido = HistoryRepository.novoNumeroPedido()
                         val metodo = metodoPagamento
                         val entregue = if (metodo == PaymentMethod.DINHEIRO) valorEntregue else null
                         val trocoFinal = if (metodo == PaymentMethod.DINHEIRO) troco else null
@@ -324,30 +428,69 @@ fun OrderScreen(onBack: () -> Unit) {
                             val itensComida = ReceiptBuilder.itensPorCategoria(itensPedido, Category.COMIDA)
                             val itensBebida = ReceiptBuilder.itensPorCategoria(itensPedido, Category.BEBIDA)
 
-                            // 1) Recibo do cliente, com número do pedido e todos os artigos
-                            val rCliente = printer.imprimir(ReceiptBuilder.reciboCliente(numeroPedido, itensPedido))
-                            if (!rCliente.sucesso) snackbarHostState.showSnackbar("Recibo: ${rCliente.mensagem}")
+                            if (emEdicao && pedidoParaEditar != null) {
+                                val numeroPedido = pedidoParaEditar.id
 
-                            // 2) Talão da cozinha, só se houver artigos de comida
-                            if (itensComida.isNotEmpty()) {
-                                val rComida = printer.imprimir(ReceiptBuilder.talaoProducao("COZINHA - COMIDA", numeroPedido, itensComida))
-                                if (!rComida.sucesso) snackbarHostState.showSnackbar("Talão comida: ${rComida.mensagem}")
+                                // 1) Recibo do cliente corrigido
+                                val rCliente = printer.imprimir(
+                                    ReceiptBuilder.reciboCliente(numeroPedido, itensPedido, corrigido = true)
+                                )
+                                if (!rCliente.sucesso) snackbarHostState.showSnackbar("Recibo: ${rCliente.mensagem}")
+
+                                // 2) Talão da cozinha corrigido, só se houver artigos de comida
+                                if (itensComida.isNotEmpty()) {
+                                    val rComida = printer.imprimir(
+                                        ReceiptBuilder.talaoProducao("COZINHA - COMIDA", numeroPedido, itensComida, corrigido = true)
+                                    )
+                                    if (!rComida.sucesso) snackbarHostState.showSnackbar("Talão comida: ${rComida.mensagem}")
+                                }
+
+                                // 3) Talão do bar corrigido, só se houver artigos de bebida
+                                if (itensBebida.isNotEmpty()) {
+                                    val rBebida = printer.imprimir(
+                                        ReceiptBuilder.talaoProducao("BAR - BEBIDA", numeroPedido, itensBebida, corrigido = true)
+                                    )
+                                    if (!rBebida.sucesso) snackbarHostState.showSnackbar("Talão bebida: ${rBebida.mensagem}")
+                                }
+
+                                HistoryRepository.atualizarPedido(
+                                    numeroPedido, pedidoParaEditar.timestamp, itensPedido, metodo,
+                                    autor = autorEdicao ?: "Desconhecido",
+                                    valorEntregue = entregue, troco = trocoFinal
+                                )
+                                carrinho.clear()
+                                aImprimir = false
+                                mostrarPagamento = false
+                                snackbarHostState.showSnackbar("Pedido #$numeroPedido corrigido e reimpresso.")
+                                onEdicaoConcluida?.invoke() ?: onBack()
+                            } else {
+                                val numeroPedido = HistoryRepository.novoNumeroPedido()
+
+                                // 1) Recibo do cliente, com número do pedido e todos os artigos
+                                val rCliente = printer.imprimir(ReceiptBuilder.reciboCliente(numeroPedido, itensPedido))
+                                if (!rCliente.sucesso) snackbarHostState.showSnackbar("Recibo: ${rCliente.mensagem}")
+
+                                // 2) Talão da cozinha, só se houver artigos de comida
+                                if (itensComida.isNotEmpty()) {
+                                    val rComida = printer.imprimir(ReceiptBuilder.talaoProducao("COZINHA - COMIDA", numeroPedido, itensComida))
+                                    if (!rComida.sucesso) snackbarHostState.showSnackbar("Talão comida: ${rComida.mensagem}")
+                                }
+
+                                // 3) Talão do bar, só se houver artigos de bebida
+                                if (itensBebida.isNotEmpty()) {
+                                    val rBebida = printer.imprimir(ReceiptBuilder.talaoProducao("BAR - BEBIDA", numeroPedido, itensBebida))
+                                    if (!rBebida.sucesso) snackbarHostState.showSnackbar("Talão bebida: ${rBebida.mensagem}")
+                                }
+
+                                HistoryRepository.registarPedido(numeroPedido, itensPedido, metodo, entregue, trocoFinal)
+                                carrinho.clear()
+                                aImprimir = false
+                                mostrarPagamento = false
+                                snackbarHostState.showSnackbar("Pedido #$numeroPedido registado.")
                             }
-
-                            // 3) Talão do bar, só se houver artigos de bebida
-                            if (itensBebida.isNotEmpty()) {
-                                val rBebida = printer.imprimir(ReceiptBuilder.talaoProducao("BAR - BEBIDA", numeroPedido, itensBebida))
-                                if (!rBebida.sucesso) snackbarHostState.showSnackbar("Talão bebida: ${rBebida.mensagem}")
-                            }
-
-                            HistoryRepository.registarPedido(numeroPedido, itensPedido, metodo, entregue, trocoFinal)
-                            carrinho.clear()
-                            aImprimir = false
-                            mostrarPagamento = false
-                            snackbarHostState.showSnackbar("Pedido #$numeroPedido registado.")
                         }
                     }
-                ) { Text(if (aImprimir) "A PROCESSAR..." else "CONCLUIR PAGAMENTO") }
+                ) { Text(if (aImprimir) "A PROCESSAR..." else if (emEdicao) "REIMPRIMIR CORRIGIDO" else "CONCLUIR PAGAMENTO") }
             },
             dismissButton = {
                 TextButton(onClick = { mostrarPagamento = false }, enabled = !aImprimir) { Text("Cancelar") }

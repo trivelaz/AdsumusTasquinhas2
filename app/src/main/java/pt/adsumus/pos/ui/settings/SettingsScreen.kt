@@ -2,13 +2,20 @@ package pt.adsumus.pos.ui.settings
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import pt.adsumus.pos.data.AdminAuth
 import pt.adsumus.pos.data.HistoryRepository
 import pt.adsumus.pos.data.BackupShare
 import pt.adsumus.pos.data.CsvBackup
@@ -18,7 +25,7 @@ import pt.adsumus.pos.printer.UsbPrinterManager
 import pt.adsumus.pos.ui.components.AdsumusTopBar
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onGerirProdutos: () -> Unit = {}) {
+fun SettingsScreen(onBack: () -> Unit, onGerirProdutos: () -> Unit = {}, onVerAuditoria: () -> Unit = {}) {
     val context = LocalContext.current
     val printer = remember { UsbPrinterManager(context) }
     val scope = rememberCoroutineScope()
@@ -26,6 +33,7 @@ fun SettingsScreen(onBack: () -> Unit, onGerirProdutos: () -> Unit = {}) {
 
     var aTestar by remember { mutableStateOf(false) }
     var mostrarConfirmacaoLimpar by remember { mutableStateOf(false) }
+    var mostrarDialogoPin by remember { mutableStateOf(false) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -116,6 +124,33 @@ fun SettingsScreen(onBack: () -> Unit, onGerirProdutos: () -> Unit = {}) {
                 }
             }
 
+            SettingsSection(title = "Segurança") {
+                Text(
+                    if (AdminAuth.pinDefinido)
+                        "Um pedido já pago só pode ser corrigido no Histórico depois de introduzir o PIN de administrador."
+                    else
+                        "Ainda não definiste um PIN de administrador — enquanto isso, a edição de pedidos pagos fica bloqueada no Histórico.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { mostrarDialogoPin = true },
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                    Text(if (AdminAuth.pinDefinido) "ALTERAR PIN" else "DEFINIR PIN")
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onVerAuditoria,
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                    Text("VER REGISTO DE ALTERAÇÕES")
+                }
+            }
+
             SettingsSection(title = "Histórico") {
                 Text(
                     "Apaga os pedidos e movimentos de caixa em aberto NA APP, para começar um " +
@@ -156,6 +191,90 @@ fun SettingsScreen(onBack: () -> Unit, onGerirProdutos: () -> Unit = {}) {
             }
         )
     }
+
+    if (mostrarDialogoPin) {
+        DefinirPinDialog(
+            onDismiss = { mostrarDialogoPin = false },
+            onSucesso = {
+                mostrarDialogoPin = false
+                scope.launch { snackbarHostState.showSnackbar("PIN de administrador atualizado.") }
+            }
+        )
+    }
+}
+
+/**
+ * Diálogo para definir o primeiro PIN de administrador, ou para o trocar (exigindo sempre o PIN
+ * atual, se já existir um). O PIN tem de ter pelo menos 4 dígitos e ser confirmado duas vezes,
+ * para reduzir o risco de ficar definido um PIN escrito por engano.
+ */
+@Composable
+private fun DefinirPinDialog(onDismiss: () -> Unit, onSucesso: () -> Unit) {
+    val jaTemPin = AdminAuth.pinDefinido
+    var pinAtual by remember { mutableStateOf("") }
+    var pinNovo by remember { mutableStateOf("") }
+    var pinConfirmar by remember { mutableStateOf("") }
+    var erro by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (jaTemPin) "Alterar PIN de administrador" else "Definir PIN de administrador") },
+        text = {
+            Column {
+                if (jaTemPin) {
+                    OutlinedTextField(
+                        value = pinAtual,
+                        onValueChange = { pinAtual = it.filter { c -> c.isDigit() }; erro = null },
+                        label = { Text("PIN atual") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                OutlinedTextField(
+                    value = pinNovo,
+                    onValueChange = { pinNovo = it.filter { c -> c.isDigit() }; erro = null },
+                    label = { Text("Novo PIN (mínimo 4 dígitos)") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = pinConfirmar,
+                    onValueChange = { pinConfirmar = it.filter { c -> c.isDigit() }; erro = null },
+                    label = { Text("Confirmar novo PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                erro?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                when {
+                    jaTemPin && !AdminAuth.validarPin(pinAtual) -> erro = "PIN atual incorreto."
+                    pinNovo.length < 4 -> erro = "O novo PIN tem de ter pelo menos 4 dígitos."
+                    pinNovo != pinConfirmar -> erro = "Os dois PIN não coincidem."
+                    else -> {
+                        AdminAuth.definirPin(pinNovo)
+                        onSucesso()
+                    }
+                }
+            }) { Text("Guardar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
 }
 
 @Composable
